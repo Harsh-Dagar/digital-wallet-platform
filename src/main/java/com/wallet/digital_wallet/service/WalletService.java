@@ -79,6 +79,9 @@ public class WalletService {
         return mapToTransactionResponse(saved);
     }
 
+    // TODO: Wrap transfer operations in MongoDB transaction (@Transactional)
+    // Requires MongoDB replica set in docker-compose
+    // Currently not atomic — if crash between steps, data can be inconsistent
     public TransactionResponse transfer(String userId, TransferRequest request) {
         // idempotency check
         transactionRepository.findByIdempotencyKey(request.getIdempotencyKey())
