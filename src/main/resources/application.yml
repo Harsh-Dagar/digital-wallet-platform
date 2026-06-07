@@ -13,3 +13,7 @@ server:
 logging:
   level:
     com.wallet: DEBUG
+
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:86400000}

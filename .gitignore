@@ -40,4 +40,5 @@ logs/
 
 # Docker volumes (if you ever mount locally)
 mongo-data/
-redis-data/
+redis-data/application-local.yml
+application-local.properties
