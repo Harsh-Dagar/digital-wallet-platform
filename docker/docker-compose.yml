@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mongodb:
     image: mongo:7
@@ -13,5 +11,14 @@ services:
     volumes:
       - mongo-data:/data/db
 
+  redis:
+    image: redis:7.2-alpine
+    container_name: wallet-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+
 volumes:
   mongo-data:
+  redis-data:
