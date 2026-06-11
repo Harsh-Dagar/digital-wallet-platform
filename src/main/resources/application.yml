@@ -6,6 +6,9 @@ spring:
     mongodb:
       uri: mongodb://admin:password@localhost:27017/digitalwallet?authSource=admin
       database: digitalwallet
+    redis:
+      host: localhost
+      port: 6380
 
 server:
   port: 8080
