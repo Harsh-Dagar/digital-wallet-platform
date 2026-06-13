@@ -73,6 +73,7 @@ public class RedisService {
         redisTemplate.opsForValue().set(key, transactions, RECENT_TRANSACTIONS_TTL_MINUTES, TimeUnit.MINUTES);
     }
 
+    @SuppressWarnings("unchecked")
     public List<TransactionResponse> getCachedRecentTransactions(String userId) {
         String key = RECENT_TRANSACTIONS_KEY_PREFIX + userId;
         return (List<TransactionResponse>) redisTemplate.opsForValue().get(key);
