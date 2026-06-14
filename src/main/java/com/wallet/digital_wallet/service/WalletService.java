@@ -12,18 +12,21 @@ import com.wallet.digital_wallet.model.Wallet.WalletStatus;
 import com.wallet.digital_wallet.repository.TransactionRepository;
 import com.wallet.digital_wallet.repository.WalletRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class WalletService {
 
     private final WalletRepository walletRepository;
     private final TransactionRepository transactionRepository;
+    private final RedisService redisService;
 
     public WalletResponse createWallet(String userId) {
         if (walletRepository.existsByUserId(userId)) {
@@ -38,13 +41,26 @@ public class WalletService {
                 .build();
 
         Wallet saved = walletRepository.save(wallet);
-        return mapToWalletResponse(saved);
+        WalletResponse response = mapToWalletResponse(saved);
+
+        redisService.cacheWallet(userId, response);
+        return response;
     }
 
     public WalletResponse getWallet(String userId) {
+        WalletResponse cached = redisService.getCachedWallet(userId);
+        if (cached != null) {
+            log.debug("Wallet cache hit for user: {}", userId);
+            return cached;
+        }
+
+        log.debug("Wallet cache miss for user: {}", userId);
         Wallet wallet = walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new RuntimeException("Wallet not found"));
-        return mapToWalletResponse(wallet);
+
+        WalletResponse response = mapToWalletResponse(wallet);
+        redisService.cacheWallet(userId, response);
+        return response;
     }
 
     public TransactionResponse deposit(String userId, DepositRequest request) {
@@ -76,6 +92,10 @@ public class WalletService {
         transaction.setStatus(TransactionStatus.SUCCESS);
         Transaction saved = transactionRepository.save(transaction);
 
+        // evict cache so next read gets fresh balance
+        redisService.evictWalletCache(userId);
+        redisService.evictRecentTransactionsCache(userId);
+
         return mapToTransactionResponse(saved);
     }
 
@@ -83,11 +103,15 @@ public class WalletService {
     // Requires MongoDB replica set in docker-compose
     // Currently not atomic — if crash between steps, data can be inconsistent
     public TransactionResponse transfer(String userId, TransferRequest request) {
-        // idempotency check
-        transactionRepository.findByIdempotencyKey(request.getIdempotencyKey())
-                .ifPresent(t -> {
-                    throw new RuntimeException("Duplicate request detected");
-                });
+        // rate limit check
+        if (redisService.isRateLimited(userId)) {
+            throw new RuntimeException("Rate limit exceeded. Max 5 transfers per minute.");
+        }
+
+        // idempotency check in Redis
+        if (redisService.isIdempotencyKeyPresent(request.getIdempotencyKey())) {
+            throw new RuntimeException("Duplicate request detected");
+        }
 
         Wallet senderWallet = walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new RuntimeException("Sender wallet not found"));
@@ -111,7 +135,9 @@ public class WalletService {
             throw new RuntimeException("Insufficient balance");
         }
 
-        // create debit transaction in PENDING state
+        // store idempotency key in Redis before processing
+        redisService.storeIdempotencyKey(request.getIdempotencyKey());
+
         Transaction debitTxn = Transaction.builder()
                 .walletId(senderWallet.getId())
                 .userId(userId)
@@ -152,14 +178,31 @@ public class WalletService {
         debitTxn.setStatus(TransactionStatus.SUCCESS);
         Transaction saved = transactionRepository.save(debitTxn);
 
+        // evict caches for both users
+        redisService.evictWalletCache(userId);
+        redisService.evictWalletCache(receiverWallet.getUserId());
+        redisService.evictRecentTransactionsCache(userId);
+        redisService.evictRecentTransactionsCache(receiverWallet.getUserId());
+
         return mapToTransactionResponse(saved);
     }
 
     public List<TransactionResponse> getTransactionHistory(String userId) {
-        return transactionRepository.findByUserIdOrderByCreatedAtDesc(userId)
+        List<TransactionResponse> cached = redisService.getCachedRecentTransactions(userId);
+        if (cached != null) {
+            log.debug("Transaction cache hit for user: {}", userId);
+            return cached;
+        }
+
+        log.debug("Transaction cache miss for user: {}", userId);
+        List<TransactionResponse> transactions = transactionRepository
+                .findByUserIdOrderByCreatedAtDesc(userId)
                 .stream()
                 .map(this::mapToTransactionResponse)
                 .collect(Collectors.toList());
+
+        redisService.cacheRecentTransactions(userId, transactions);
+        return transactions;
     }
 
     private WalletResponse mapToWalletResponse(Wallet wallet) {
